@@ -1,0 +1,163 @@
+Include "MAPBASIC.DEF"
+Declare Sub Main
+Declare Sub ExportMap
+
+Sub Main
+    ' Install a named menu into the classic MapInfo 15 menu bar.
+    ' The export handler retains the proven Trial 07 source.
+    Create Menu "GeoMaker MBTiles" As
+        "Export Raster MBTiles..." Calling ExportMap
+    Alter Menu Bar Add "GeoMaker MBTiles"
+End Sub
+
+Sub ExportMap
+    Dim m As Integer
+    Dim dpi As Integer
+    Dim zlo As Integer
+    Dim zhi As Integer
+    Dim sDpi As String
+    Dim sMin As String
+    Dim sMax As String
+    Dim x1 As Float
+    Dim y1 As Float
+    Dim x2 As Float
+    Dim y2 As Float
+    Dim cs As String
+    Dim img As String
+    Dim info As String
+    Dim cmd As String
+    Dim winWidthIn As Float
+    Dim dpiEstimate As Float
+    Dim targetRes As Float
+    Dim autoDpi As Integer
+    Dim autoNote As String
+
+    m = FrontWindow()
+    If m = 0 Then
+        Note "Please activate a Map window."
+        Exit Sub
+    End If
+    If WindowInfo(m, WIN_INFO_TYPE) <> WIN_MAPPER Then
+        Note "Please activate a Map window."
+        Exit Sub
+    End If
+
+    ' Compute an INITIAL DPI suggestion BEFORE rendering, without changing the proven exporter.
+    ' The approximation assumes projected map coordinates measured in metres.
+    ' In geographic/other unit systems, default to the proven Trial07 DPI.
+    Set CoordSys Window m
+    x1 = MapperInfo(m, MAPPER_INFO_MINX)
+    y1 = MapperInfo(m, MAPPER_INFO_MINY)
+    x2 = MapperInfo(m, MAPPER_INFO_MAXX)
+    y2 = MapperInfo(m, MAPPER_INFO_MAXY)
+    cs = MapperInfo(m, MAPPER_INFO_COORDSYS_CLAUSE)
+    Set Paper Units "in"
+    winWidthIn = WindowInfo(m, WIN_INFO_WIDTH)
+    sMin = "10"
+    sMax = "17"
+    autoDpi = 470
+    autoNote = "Fallback: 470 DPI; verify CRS units before using an estimate."
+    If winWidthIn > 1 And winWidthIn < 100 And x2 > x1 Then
+        If x2 - x1 > 100 And x2 - x1 < 1000000 Then
+            ' 1.0x nominal resolution factor; EPSG:3857 at z17, conservative estimate for local metre CRS.
+            ' Re-estimate if the user changes max zoom from the default 17.
+            targetRes = 156543.03392804097 / (2 ^ 17)
+            dpiEstimate = (x2 - x1) / (targetRes * winWidthIn) * 1.0
+            autoDpi = Int(dpiEstimate + 0.99999)
+            If autoDpi < 120 Then
+                autoDpi = 120
+            End If
+            If autoDpi > 1200 Then
+                autoDpi = 1200
+            End If
+            autoNote = "Native zoom-17 DPI (1.0x); editable for extra detail."
+        End If
+    End If
+    sDpi = Str$(autoDpi)
+    Dialog
+        Title "GeoMaker - Export Raster MBTiles"
+        Control StaticText
+            Title "Minimum zoom (0..22):"
+            Position 60, 17
+        Control EditText
+        	Position 5, 15
+        	Width 50
+            Value sMin
+            Into sMin
+        Control StaticText
+            Title "Maximum zoom (0..22):"
+            Position 60, 37
+        Control EditText
+            Position 5, 35
+            Width 50
+            Value sMax
+            Into sMax
+        Control StaticText
+            Title autoNote
+            Position 5, 50
+        Control StaticText
+            Title "MapInfo Save Window DPI (72..2400):"
+            Position 60, 67
+        Control EditText
+            Position 5, 65
+            Width 50
+            Value sDpi
+            Into sDpi
+        Control OKButton
+        Control CancelButton
+    If Not CommandInfo(CMD_INFO_DLG_OK) Then
+        Exit Sub
+    End If
+    zlo = Val(sMin)
+    zhi = Val(sMax)
+    dpi = Val(sDpi)
+    If zhi <> 17 And dpi = autoDpi And winWidthIn > 1 And winWidthIn < 100 Then
+        If x2 - x1 > 100 And x2 - x1 < 1000000 Then
+            targetRes = 156543.03392804097 / (2 ^ zhi)
+            dpi = Int((x2 - x1) / (targetRes * winWidthIn) * 1.0 + 0.99999)
+            If dpi < 120 Then
+                dpi = 120
+            End If
+            If dpi > 1200 Then
+                dpi = 1200
+            End If
+            Note "Recalculated DPI for selected maximum zoom: " + Str$(dpi)
+        End If
+    End If
+    If zlo < 0 Or zlo > zhi Or zhi > 22 Then
+        Note "Invalid zoom range (0..22)."
+        Exit Sub
+    End If
+    If dpi < 72 Or dpi > 2400 Then
+        Note "Invalid DPI (72..2400)."
+        Exit Sub
+    End If
+
+    Set CoordSys Window m
+    x1 = MapperInfo(m, MAPPER_INFO_MINX)
+    y1 = MapperInfo(m, MAPPER_INFO_MINY)
+    x2 = MapperInfo(m, MAPPER_INFO_MAXX)
+    y2 = MapperInfo(m, MAPPER_INFO_MAXY)
+    cs = MapperInfo(m, MAPPER_INFO_COORDSYS_CLAUSE)
+    If x2 <= x1 Or y2 <= y1 Then
+        Note "Invalid map extent."
+        Exit Sub
+    End If
+
+    img = "C:\Users\Public\Documents\GeoMaker_MI_Bridge.png"
+    info = "C:\Users\Public\Documents\GeoMaker_MI_Bridge.bounds.txt"
+    Save Window m As img Type "PNG" Resolution dpi
+    Open File info For Output As #1
+    Print #1, "png=" + img
+    Print #1, "minx=" + Str$(x1)
+    Print #1, "miny=" + Str$(y1)
+    Print #1, "maxx=" + Str$(x2)
+    Print #1, "maxy=" + Str$(y2)
+    Print #1, "coordsys=" + cs
+    Print #1, "dpi=" + Str$(dpi)
+    Print #1, "minzoom=" + Str$(zlo)
+    Print #1, "maxzoom=" + Str$(zhi)
+    Close File #1
+    cmd = "wscript.exe " + Chr$(34) + "C:\GeoMaker_MI_Builder\START_FROM_MI_HIDDEN.vbs" + Chr$(34)
+    Run Program cmd
+End Sub
